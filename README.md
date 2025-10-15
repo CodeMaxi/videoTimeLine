@@ -3,9 +3,6 @@
 一个基于 Canvas 实现的 Vue3 视频录像时间轴组件，支持缩放、拖拽、点击跳转等交互功能。
 
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Vue](https://img.shields.io/badge/vue-3.x-brightgreen.svg)
-
 ## ✨ 特性
 
 - 🎯 **24小时时间轴显示** - 完整展示一天的时间范围
