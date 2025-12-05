@@ -13,7 +13,7 @@
 
       <!-- 当前播放时间指示器 -->
       <div v-if="currentTime" class="current-time-indicator" :style="{ left: currentTimePosition + 'px' }">
-        <div class="time-label">{{ currentTimeLabel }}</div>
+        <!-- <div class="time-label">{{ currentTimeLabel }}</div> -->
       </div>
 
       <!-- 悬停提示 -->
@@ -25,8 +25,6 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
-
 const props = defineProps({
   // 录像数据 [{start: timestamp, duration: ms}, ...]
   recordings: {
@@ -45,9 +43,7 @@ const props = defineProps({
   },
 })
 
-
 const emit = defineEmits(['seek'])
-
 
 const timelineRef = ref(null)
 const canvasRef = ref(null)
@@ -55,7 +51,7 @@ const ctx = ref(null)
 
 // 缩放级别：1小时到10分钟
 const zoomLevel = ref(1) // 1 = 24小时, 最大 144 = 10分钟视图
-const MAX_ZOOM_LEVEL = 60 
+const MAX_ZOOM_LEVEL = 30
 const scrollOffset = ref(0) // 水平滚动偏移
 const isDragging = ref(false)
 const dragStartX = ref(0)
@@ -86,7 +82,9 @@ const currentTimePosition = computed(() => {
   const viewWidth = width * zoomLevel.value
   const msPerPixel = msPerDay / viewWidth
 
-  return msFromDayStart / msPerPixel - scrollOffset.value
+  // 不减去scrollOffset,这样指示器位置是固定的,不会跟随拖动
+  const absolutePosition = msFromDayStart / msPerPixel
+  return absolutePosition - scrollOffset.value
 })
 
 // 当前播放时间标签
@@ -155,25 +153,55 @@ const drawTimeRuler = (width, startMs, endMs, msPerPixel) => {
   const msPerMinute = 60 * 1000
   const msPerDay = 24 * 60 * 60 * 1000
 
-  // 根据缩放级别决定刻度间隔，最小间隔为10分钟
-  let interval = msPerHour
-  if (zoomLevel.value > 12) interval = msPerMinute * 30
-  if (zoomLevel.value > 24) interval = msPerMinute * 20
-  if (zoomLevel.value > 48) interval = msPerMinute * 10
-  // 达到最大缩放级别时，保持10分钟间隔
+  // 根据缩放级别决定主刻度间隔
+  let mainInterval = msPerHour
+  let subInterval = 0 // 次刻度间隔
 
-  const startInterval = Math.floor(startMs / interval) * interval
+  if (zoomLevel.value > 12) {
+    mainInterval = msPerMinute * 30
+    subInterval = msPerMinute * 10 // 每10分钟一个次刻度
+  }
+  if (zoomLevel.value > 24) {
+    mainInterval = msPerMinute * 20
+    subInterval = msPerMinute * 5 // 每5分钟一个次刻度
+  }
+  if (zoomLevel.value > 48) {
+    mainInterval = msPerMinute * 10
+    subInterval = msPerMinute * 2 // 每2分钟一个次刻度
+  }
 
-  ctx.value.strokeStyle = '#555'
-  ctx.value.fillStyle = '#999'
+  const startInterval = Math.floor(startMs / mainInterval) * mainInterval
+
+  // 绘制次刻度线(不显示时间文字)
+  if (subInterval > 0) {
+    ctx.value.strokeStyle = '#888'
+    const startSubInterval = Math.floor(startMs / subInterval) * subInterval
+
+    for (let ms = startSubInterval; ms <= Math.min(endMs, msPerDay); ms += subInterval) {
+      // 跳过主刻度位置
+      if (ms % mainInterval === 0) continue
+
+      const x = ms / msPerPixel - scrollOffset.value
+      if (x < -50 || x > width) continue
+
+      ctx.value.beginPath()
+      ctx.value.moveTo(x, 0)
+      ctx.value.lineTo(x, 6) // 次刻度线较短
+      ctx.value.stroke()
+    }
+  }
+
+  // 绘制主刻度线和时间文字
+  ctx.value.strokeStyle = '#999'
+  ctx.value.fillStyle = '#ABABAB'
   ctx.value.font = '11px Arial'
   ctx.value.textAlign = 'left'
 
-  for (let ms = startInterval; ms <= Math.min(endMs, msPerDay); ms += interval) {
+  for (let ms = startInterval; ms <= Math.min(endMs, msPerDay); ms += mainInterval) {
     const x = ms / msPerPixel - scrollOffset.value
     if (x < -50 || x > width) continue
 
-    // 刻度线
+    // 主刻度线
     ctx.value.beginPath()
     ctx.value.moveTo(x, 0)
     ctx.value.lineTo(x, 8)
@@ -209,9 +237,23 @@ const drawRecordings = (width, startMs, endMs, msPerPixel) => {
     const x = recordStart / msPerPixel - scrollOffset.value
     const w = record.duration / msPerPixel
 
+    // 只绘制在可见范围内的部分
     if (x + w > 0 && x < width) {
-      const drawX = Math.max(0, x)
-      const drawW = Math.min(w, width - x)
+      // 计算实际可见的起始位置和宽度
+      let drawX = x
+      let drawW = w
+
+      // 如果录像块起始位置在左边界外,裁剪左侧
+      if (x < 0) {
+        drawW = w + x // 减去左侧不可见的部分
+        drawX = 0
+      }
+
+      // 如果录像块结束位置在右边界外,裁剪右侧
+      if (drawX + drawW > width) {
+        drawW = width - drawX
+      }
+
       if (drawW > 0) {
         ctx.value.fillRect(drawX, RECORDING_TOP, drawW, RECORDING_HEIGHT)
       }
@@ -256,7 +298,7 @@ const handleMouseDown = e => {
 
 const handleMouseMove = e => {
   if (!timelineRef.value) return
-  
+
   const rect = timelineRef.value.getBoundingClientRect()
   const mouseX = e.clientX - rect.left
 
@@ -293,7 +335,7 @@ const handleMouseMove = e => {
 
 const handleMouseUp = e => {
   const wasDragging = isDragging.value
-  
+
   // 立即重置拖拽状态
   isDragging.value = false
   const tempDragStartX = dragStartX.value
@@ -365,7 +407,7 @@ onUnmounted(() => {
 <style scoped lang="scss">
 .video-timeline-container {
   width: 100%;
-  padding-bottom: 16px;
+  //padding-bottom: 16px;
   padding-top: 8px;
 }
 
@@ -373,7 +415,7 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 60px;
-  cursor: grab;
+  cursor: pointer;
   user-select: none;
   border-radius: 4px;
   &:active {
